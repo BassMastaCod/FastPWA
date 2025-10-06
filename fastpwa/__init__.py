@@ -2,35 +2,21 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Depends
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from jinja2 import Environment, BaseLoader
+from jinja2 import Environment, FileSystemLoader
 from pydantic import BaseModel
 
-BASE_TEMPLATE = '''
+
+PAGE_TEMPLATE = '''
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8" />
-    <title>{{ app_title }}</title>
-    {% if favicon %}
-    <link rel="icon" href="{{ favicon.src }}" type="{{ favicon.type }}">
-    <link rel="apple-touch-icon" href="{{ favicon.src }}">
-    {% endif %}
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="{{ description }}">
-    {% if color %}
-    <meta name="theme-color" content="{{ color }}">
-    {% endif %}
-    <link rel="manifest" href="{{ app_id }}.webmanifest?path={{ request.url.path }}">
-    <script>
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('service-worker.js?path={{ request.url.path }}')
-                .then(reg => console.log('SW registered:', reg.scope))
-                .catch(err => console.error('SW registration failed:', err));
-        }
-    </script>
+    <title>{{ title }}</title>
+    {{ pwa_content | safe }}
     {% for path in css %}
     <link rel="stylesheet" href="{{ path }}">
     {% endfor %}
@@ -42,6 +28,26 @@ BASE_TEMPLATE = '''
     {{ body | safe }}
 </body>
 </html>
+'''
+
+
+PWA_TEMPLATE = '''
+    {% if favicon %}
+    <link rel="icon" href="{{ favicon.src }}" type="{{ favicon.type }}">
+    <link rel="apple-touch-icon" href="{{ favicon.src }}">
+    {% endif %}
+    <meta name="description" content="{{ description }}">
+    {% if color %}
+    <meta name="theme-color" content="{{ color }}">
+    {% endif %}
+    <link rel="manifest" href="{{ route }}/{{ app_id }}.webmanifest">
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('{{ route }}/service-worker.js')
+                .then(reg => console.log('SW registered:', reg.scope))
+                .catch(err => console.error('SW registration failed:', err));
+        }
+    </script>
 '''
 
 
@@ -141,8 +147,9 @@ class PWA(FastAPI):
         self.global_js = []
         self.favicon = None
         self.prefix = '' if not prefix else '/' + prefix.strip('/')
-        self.env = Environment(loader=BaseLoader())
-        self.template = self.env.from_string(BASE_TEMPLATE)
+        self.env = Environment(loader=FileSystemLoader('.'))
+        self.page_template = self.env.from_string(PAGE_TEMPLATE)
+        self.pwa_template = self.env.from_string(PWA_TEMPLATE)
         logger.info(f'Established {title} API, viewable at {self.docs_url}')
 
     @property
@@ -181,7 +188,7 @@ class PWA(FastAPI):
             break
 
     def register_pwa(self,
-            html: Optional[str | Path] = None,
+            html: str | Path,
             css: Optional[str | list[str]] = None,
             js: Optional[str | list[str]] = None,
             app_name: Optional[str] = None,
@@ -189,40 +196,77 @@ class PWA(FastAPI):
             icon: Optional[Icon] = None,
             color: Optional[str] = None,
             background_color: Optional[str] = '#FFFFFF',
-            dynamic_path = False):
-        @self.get(f'{self.prefix}/{self.pwa_id}.webmanifest', include_in_schema=False)
-        async def manifest(path: Optional[str] = self.prefix) -> Manifest:
+            route: Optional[str] = '',
+            get_shortcuts: Optional[callable] = None):
+        route = '/'.join((self.prefix, route))
+        app_name = app_name or self.title
+        icon = icon or self.favicon
+
+        @self.get(f'{route}/{self.pwa_id}.webmanifest', include_in_schema=False)
+        async def manifest() -> Manifest:
             return Manifest(
-                name=self.title,
-                short_name=self.title.replace(' ', ''),
+                name=app_name,
+                short_name=app_name.replace(' ', ''),
                 description=self.summary,
-                start_url=path,
-                scope=path,
+                start_url=route,
+                scope=route,
                 id=self.pwa_id,
                 display='standalone',
                 theme_color=color,
                 background_color=background_color,
-                icons=[self.favicon]
+                icons=[icon],
+                shortcuts=get_shortcuts(route) or []
             )
 
-        @self.get(f'{self.prefix}/service-worker.js', include_in_schema=False)
+        @self.get(f'{route}/service-worker.js', include_in_schema=False)
         async def sw_js():
             return HTMLResponse(content=SERVICE_WORKER, media_type='application/javascript')
 
-        app_name = app_name or self.title
-        route = f'{self.prefix}/{{path:path}}' if dynamic_path else f'{self.prefix}/'
         @self.get(route, include_in_schema=False)
         async def index(request: Request) -> HTMLResponse:
-            return HTMLResponse(self.template.render(
-                request=request,
-                prefix=self.prefix,
+            pwa_meta = self.pwa_template.render(
+                route=route,
                 app_id=self.pwa_id,
-                app_title=app_name,
                 description=app_description or self.summary,
-                favicon=icon or self.favicon or None,
-                color=color,
+                favicon=icon,
+                color=color
+            )
+            return HTMLResponse(self.page_template.render(
+                request=request,
+                title=app_name,
+                pwa_content=pwa_meta,
                 css=ensure_list(css) + self.index_css + self.global_css,
                 js=ensure_list(js) + self.index_js + self.global_js,
                 body=Path(html).read_text(encoding='utf-8')
             ))
-        logger.info(f'Registered Progressive Web App {app_name} at {route.replace('{path:path}', '*')}')
+        logger.info(f'Registered Progressive Web App {app_name}')
+
+    def pwa_with_shortcuts(self, **kwargs):
+        def decorator(func):
+            self.register_pwa(**kwargs, get_shortcuts=func)
+            return func
+        return decorator
+
+    def page(self,
+             route: str,
+             html: str | Path,
+             css: Optional[str | list[str]] = None,
+             js: Optional[str | list[str]] = None,
+             color: Optional[str] = None,
+             **get_kwargs):
+        route = '/'.join((self.prefix, route))
+        def decorator(func):
+            async def response_wrapper(request: Request, context: dict = Depends(func)):
+                return HTMLResponse(self.page_template.render(
+                    request=request,
+                    title=context.get('title', self.title),
+                    color=color,
+                    css=ensure_list(css) + self.global_css,
+                    js=ensure_list(js) + self.global_js,
+                    body=self.env.get_template(html).render(**context)
+                ))
+
+            self.get(route, include_in_schema=False, **get_kwargs)(response_wrapper)
+            logger.info(f'Registered page at {route}')
+            return func
+        return decorator
