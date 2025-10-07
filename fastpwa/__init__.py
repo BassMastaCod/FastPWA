@@ -84,8 +84,9 @@ class Icon(BaseModel):
     type: str
 
     @classmethod
-    def from_file(cls, file: Path, mount_path: str) -> 'Icon':
-        match (file.suffix.lower()):
+    def for_web_path(cls, web_path: str) -> 'Icon':
+        suffix = Path(web_path).suffix.lower()
+        match suffix:
             case '.ico':
                 image_type = 'x-icon'
             case '.png':
@@ -93,9 +94,10 @@ class Icon(BaseModel):
             case '.svg':
                 image_type = 'svg+xml'
             case _:
-                raise ValueError(f'Unsupported icon file type: {file.suffix}')
+                raise ValueError(f'Unsupported icon file type: {suffix}')
+
         return cls(
-            src=f'{mount_path}/{file.name}',
+            src=web_path,
             sizes='any',
             type=f'image/{image_type}'
         )
@@ -152,6 +154,10 @@ class PWA(FastAPI):
         self.pwa_template = self.env.from_string(PWA_TEMPLATE)
         logger.info(f'Established {title} API, viewable at {self.docs_url}')
 
+    def with_prefix(self, route: str) -> str:
+        """Adds the prefix to a route, avoiding empty segments trailing slashes."""
+        return f'{self.prefix}/{route}' if route else self.prefix
+
     @property
     def pwa_id(self):
         return self.title.lower().replace(' ', '-')
@@ -160,7 +166,7 @@ class PWA(FastAPI):
         folder = Path(folder)
         if not folder.exists():
             raise ValueError(f'Static folder "{folder}" does not exist.')
-        mount_path = f'{self.prefix}/{folder.name}'
+        mount_path = self.with_prefix(folder.name)
 
         self.mount(mount_path, StaticFiles(directory=str(folder)), name=folder.name)
         logger.info(f'Mounted static folder "{folder}" at {mount_path}')
@@ -183,7 +189,9 @@ class PWA(FastAPI):
 
     def _discover_favicon(self, folder, mount_path):
         for file in folder.rglob('favicon.*'):
-            self.favicon = Icon.from_file(file, mount_path)
+            rel_path = file.relative_to(folder)
+            web_path = f'{mount_path}/{rel_path.as_posix()}'
+            self.favicon = Icon.for_web_path(web_path)
             logger.info(f'Discovered favicon: {self.favicon}')
             break
 
@@ -196,9 +204,9 @@ class PWA(FastAPI):
             icon: Optional[Icon] = None,
             color: Optional[str] = None,
             background_color: Optional[str] = '#FFFFFF',
-            route: Optional[str] = '',
+            route: Optional[str] = None,
             get_shortcuts: Optional[callable] = None):
-        route = '/'.join((self.prefix, route))
+        route = self.with_prefix(route)
         app_name = app_name or self.title
         icon = icon or self.favicon
 
@@ -254,7 +262,7 @@ class PWA(FastAPI):
              js: Optional[str | list[str]] = None,
              color: Optional[str] = None,
              **get_kwargs):
-        route = '/'.join((self.prefix, route))
+        route = self.with_prefix(route)
         def decorator(func):
             async def response_wrapper(request: Request, context: dict = Depends(func)):
                 return HTMLResponse(self.page_template.render(
