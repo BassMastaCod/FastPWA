@@ -82,6 +82,7 @@ class Icon(BaseModel):
     src: str
     sizes: str
     type: str
+    purpose: str
 
     @classmethod
     def for_web_path(cls, web_path: str) -> 'Icon':
@@ -99,7 +100,8 @@ class Icon(BaseModel):
         return cls(
             src=web_path,
             sizes='any',
-            type=f'image/{image_type}'
+            type=f'image/{image_type}',
+            purpose='any maskable'
         )
 
 
@@ -223,7 +225,7 @@ class PWA(FastAPI):
                 theme_color=color,
                 background_color=background_color,
                 icons=[icon],
-                shortcuts=get_shortcuts(route) or []
+                shortcuts=get_shortcuts(route) if get_shortcuts else []
             )
 
         @self.get(f'{route}/service-worker.js', include_in_schema=False)
