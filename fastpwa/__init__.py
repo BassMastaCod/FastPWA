@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 
 from fastapi import FastAPI, Request, Depends
 from fastapi.responses import HTMLResponse
@@ -70,7 +70,7 @@ if not logger.hasHandlers():
     logger.setLevel(logging.INFO)
 
 
-def ensure_list(value: Optional[str | list[str]]) -> list[str]:
+def ensure_list(value: Optional[Any | list]) -> list:
     if value is None:
         return []
     if isinstance(value, list):
@@ -224,7 +224,7 @@ class PWA(FastAPI):
                 display='standalone',
                 theme_color=color,
                 background_color=background_color,
-                icons=[icon],
+                icons=ensure_list(icon),
                 shortcuts=get_shortcuts(route) if get_shortcuts else []
             )
 
