@@ -20,6 +20,9 @@ PAGE_TEMPLATE = '''
     {% for path in css %}
     <link rel="stylesheet" href="{{ path }}">
     {% endfor %}
+    {% for path in js_libraries %}
+    <script src="{{ path }}"></script>
+    {% endfor %}
     {% for path in js %}
     <script src="{{ path }}" type="module"></script>
     {% endfor %}
@@ -201,6 +204,7 @@ class PWA(FastAPI):
             html: str | Path,
             css: Optional[str | list[str]] = None,
             js: Optional[str | list[str]] = None,
+            js_libraries: Optional[str | list[str]] = None,
             app_name: Optional[str] = None,
             app_description: Optional[str] = None,
             icon: Optional[Icon] = None,
@@ -247,6 +251,7 @@ class PWA(FastAPI):
                 pwa_content=pwa_meta,
                 css=ensure_list(css) + self.index_css + self.global_css,
                 js=ensure_list(js) + self.index_js + self.global_js,
+                js_libraries=ensure_list(js_libraries),
                 body=Path(html).read_text(encoding='utf-8')
             ))
         logger.info(f'Registered Progressive Web App {app_name}')
@@ -262,6 +267,7 @@ class PWA(FastAPI):
              html: str | Path,
              css: Optional[str | list[str]] = None,
              js: Optional[str | list[str]] = None,
+             js_libaries: Optional[str | list[str]] = None,
              color: Optional[str] = None,
              **get_kwargs):
         route = self.with_prefix(route)
@@ -273,6 +279,7 @@ class PWA(FastAPI):
                     color=color,
                     css=ensure_list(css) + self.global_css,
                     js=ensure_list(js) + self.global_js,
+                    js_libaries=ensure_list(js_libaries),
                     body=self.env.get_template(html).render(**context)
                 ))
 
