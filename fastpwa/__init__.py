@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 
 from fastapi import FastAPI, Request, Depends
 from fastapi.responses import HTMLResponse
@@ -19,6 +19,9 @@ PAGE_TEMPLATE = '''
     {{ pwa_content | safe }}
     {% for path in css %}
     <link rel="stylesheet" href="{{ path }}">
+    {% endfor %}
+    {% for path in js_libraries %}
+    <script src="{{ path }}"></script>
     {% endfor %}
     {% for path in js %}
     <script src="{{ path }}" type="module"></script>
@@ -70,7 +73,7 @@ if not logger.hasHandlers():
     logger.setLevel(logging.INFO)
 
 
-def ensure_list(value: Optional[str | list[str]]) -> list[str]:
+def ensure_list(value: Optional[Any | list]) -> list:
     if value is None:
         return []
     if isinstance(value, list):
@@ -132,6 +135,7 @@ class PWA(FastAPI):
             title: Optional[str] = 'FastPWA App',
             summary: Optional[str] = 'Installable FastAPI app',
             prefix: Optional[str] = None,
+            template_dir: Optional[str] = '.',
             **kwargs):
         self.title = None
         self.summary = None
@@ -151,7 +155,7 @@ class PWA(FastAPI):
         self.global_js = []
         self.favicon = None
         self.prefix = '' if not prefix else '/' + prefix.strip('/')
-        self.env = Environment(loader=FileSystemLoader('.'))
+        self.env = Environment(loader=FileSystemLoader(template_dir))
         self.page_template = self.env.from_string(PAGE_TEMPLATE)
         self.pwa_template = self.env.from_string(PWA_TEMPLATE)
         logger.info(f'Established {title} API, viewable at {self.docs_url}')
@@ -201,6 +205,7 @@ class PWA(FastAPI):
             html: str | Path,
             css: Optional[str | list[str]] = None,
             js: Optional[str | list[str]] = None,
+            js_libraries: Optional[str | list[str]] = None,
             app_name: Optional[str] = None,
             app_description: Optional[str] = None,
             icon: Optional[Icon] = None,
@@ -224,7 +229,7 @@ class PWA(FastAPI):
                 display='standalone',
                 theme_color=color,
                 background_color=background_color,
-                icons=[icon],
+                icons=ensure_list(icon),
                 shortcuts=get_shortcuts(route) if get_shortcuts else []
             )
 
@@ -247,7 +252,8 @@ class PWA(FastAPI):
                 pwa_content=pwa_meta,
                 css=ensure_list(css) + self.index_css + self.global_css,
                 js=ensure_list(js) + self.index_js + self.global_js,
-                body=Path(html).read_text(encoding='utf-8')
+                js_libraries=ensure_list(js_libraries),
+                body=self.env.get_template(html).render()
             ))
         logger.info(f'Registered Progressive Web App {app_name}')
 
@@ -262,6 +268,7 @@ class PWA(FastAPI):
              html: str | Path,
              css: Optional[str | list[str]] = None,
              js: Optional[str | list[str]] = None,
+             js_libaries: Optional[str | list[str]] = None,
              color: Optional[str] = None,
              **get_kwargs):
         route = self.with_prefix(route)
@@ -273,6 +280,7 @@ class PWA(FastAPI):
                     color=color,
                     css=ensure_list(css) + self.global_css,
                     js=ensure_list(js) + self.global_js,
+                    js_libaries=ensure_list(js_libaries),
                     body=self.env.get_template(html).render(**context)
                 ))
 
