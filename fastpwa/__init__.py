@@ -135,6 +135,7 @@ class PWA(FastAPI):
             title: Optional[str] = 'FastPWA App',
             summary: Optional[str] = 'Installable FastAPI app',
             prefix: Optional[str] = None,
+            template_dir: Optional[str] = '.',
             **kwargs):
         self.title = None
         self.summary = None
@@ -154,7 +155,7 @@ class PWA(FastAPI):
         self.global_js = []
         self.favicon = None
         self.prefix = '' if not prefix else '/' + prefix.strip('/')
-        self.env = Environment(loader=FileSystemLoader('.'))
+        self.env = Environment(loader=FileSystemLoader(template_dir))
         self.page_template = self.env.from_string(PAGE_TEMPLATE)
         self.pwa_template = self.env.from_string(PWA_TEMPLATE)
         logger.info(f'Established {title} API, viewable at {self.docs_url}')
@@ -252,7 +253,7 @@ class PWA(FastAPI):
                 css=ensure_list(css) + self.index_css + self.global_css,
                 js=ensure_list(js) + self.index_js + self.global_js,
                 js_libraries=ensure_list(js_libraries),
-                body=Path(html).read_text(encoding='utf-8')
+                body=self.env.get_template(html).render()
             ))
         logger.info(f'Registered Progressive Web App {app_name}')
 
