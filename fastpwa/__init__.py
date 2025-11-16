@@ -2,7 +2,7 @@ import logging
 from pathlib import Path
 from typing import Optional, Any
 
-from fastapi import FastAPI, Request, Depends
+from fastapi import FastAPI, Request, Depends, APIRouter
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader
@@ -140,12 +140,13 @@ class PWA(FastAPI):
         self.title = None
         self.summary = None
         self.docs_url = None
+        self.prefix = self._normalize_path(prefix)
         super().__init__(
             title=title,
             summary=summary,
-            docs_url=kwargs.pop('docs_url', f'{prefix}/api/docs'),
-            redoc_url=kwargs.pop('redoc_url', f'{prefix}/api/redoc'),
-            openapi_url=kwargs.pop('openapi_url', f'{prefix}/api/openapi.json'),
+            docs_url=kwargs.pop('docs_url', self.with_prefix('api/docs')),
+            redoc_url=kwargs.pop('redoc_url', self.with_prefix('api/redoc')),
+            openapi_url=kwargs.pop('openapi_url', self.with_prefix('api/openapi.json')),
             **kwargs
         )
 
@@ -154,15 +155,19 @@ class PWA(FastAPI):
         self.global_css = []
         self.global_js = []
         self.favicon = None
-        self.prefix = '' if not prefix else '/' + prefix.strip('/')
         self.env = Environment(loader=FileSystemLoader(template_dir))
         self.page_template = self.env.from_string(PAGE_TEMPLATE)
         self.pwa_template = self.env.from_string(PWA_TEMPLATE)
+        self.api = APIRouter(prefix=self.with_prefix('api'))
         logger.info(f'Established {title} API, viewable at {self.docs_url}')
+
+    @staticmethod
+    def _normalize_path(path: str):
+        return '/' + path.strip('/') + '/' if path else '/'
 
     def with_prefix(self, route: str) -> str:
         """Adds the prefix to a route, avoiding empty segments trailing slashes."""
-        return f'{self.prefix}/{route}' if route else self.prefix
+        return f'{self.prefix}{route}' if route else self.prefix
 
     @property
     def pwa_id(self):
@@ -201,6 +206,11 @@ class PWA(FastAPI):
             logger.info(f'Discovered favicon: {self.favicon}')
             break
 
+    def api_router(self, path: Optional[str] = '', name: Optional[str] = None) -> APIRouter:
+        if path:
+            path = '/' + path.strip('/')
+        return APIRouter(prefix=self.with_prefix(f'api{path}'), tags=[name] if name else None)
+
     def register_pwa(self,
             html: str | Path,
             css: Optional[str | list[str]] = None,
@@ -217,7 +227,7 @@ class PWA(FastAPI):
         app_name = app_name or self.title
         icon = icon or self.favicon
 
-        @self.get(f'{route}/{self.pwa_id}.webmanifest', include_in_schema=False)
+        @self.get(f'{route}{self.pwa_id}.webmanifest', include_in_schema=False)
         async def manifest() -> Manifest:
             return Manifest(
                 name=app_name,
@@ -233,7 +243,7 @@ class PWA(FastAPI):
                 shortcuts=get_shortcuts(route) if get_shortcuts else []
             )
 
-        @self.get(f'{route}/service-worker.js', include_in_schema=False)
+        @self.get(f'{route}service-worker.js', include_in_schema=False)
         async def sw_js():
             return HTMLResponse(content=SERVICE_WORKER, media_type='application/javascript')
 
@@ -268,7 +278,7 @@ class PWA(FastAPI):
              html: str | Path,
              css: Optional[str | list[str]] = None,
              js: Optional[str | list[str]] = None,
-             js_libaries: Optional[str | list[str]] = None,
+             js_libraries: Optional[str | list[str]] = None,
              color: Optional[str] = None,
              **get_kwargs):
         route = self.with_prefix(route)
@@ -280,7 +290,7 @@ class PWA(FastAPI):
                     color=color,
                     css=ensure_list(css) + self.global_css,
                     js=ensure_list(js) + self.global_js,
-                    js_libaries=ensure_list(js_libaries),
+                    js_libaries=ensure_list(js_libraries),
                     body=self.env.get_template(html).render(**context)
                 ))
 
