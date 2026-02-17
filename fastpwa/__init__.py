@@ -14,6 +14,7 @@ PAGE_TEMPLATE = '''
 <html lang="en">
 <head>
     <meta charset="UTF-8" />
+    <meta name="path-prefix" content="{{ path_prefix }}">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ title }}</title>
     {{ pwa_content | safe }}
@@ -43,10 +44,10 @@ PWA_TEMPLATE = '''
     {% if color %}
     <meta name="theme-color" content="{{ color }}">
     {% endif %}
-    <link rel="manifest" href="{{ route }}/{{ app_id }}.webmanifest">
+    <link rel="manifest" href="{{ route }}{{ app_id }}.webmanifest">
     <script>
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('{{ route }}/service-worker.js')
+            navigator.serviceWorker.register('{{ route }}service-worker.js')
                 .then(reg => console.log('SW registered:', reg.scope))
                 .catch(err => console.error('SW registration failed:', err));
         }
@@ -258,6 +259,7 @@ class PWA(FastAPI):
                 color=color
             )
             return HTMLResponse(self.page_template.render(
+                path_prefix=self.prefix,
                 request=request,
                 title=app_name,
                 pwa_content=pwa_meta,
@@ -286,6 +288,7 @@ class PWA(FastAPI):
         def decorator(func):
             async def response_wrapper(request: Request, context: dict = Depends(func)):
                 return HTMLResponse(self.page_template.render(
+                    path_prefix=self.prefix,
                     request=request,
                     title=context.get('title', self.title),
                     color=color,
