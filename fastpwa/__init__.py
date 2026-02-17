@@ -56,13 +56,69 @@ PWA_TEMPLATE = '''
 
 
 SERVICE_WORKER = '''
-self.addEventListener('install', (event) => {
-  self.skipWaiting();
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', () => self.clients.claim());
+
+self.addEventListener('fetch', event => {
+  const req = event.request;
+
+  // Only GET participates in caching
+  if (req.method !== 'GET') {
+    event.respondWith(fetch(req));
+    return;
+  }
+
+  event.respondWith(handleRequest(req));
 });
 
-self.addEventListener('activate', (event) => {
-  return self.clients.claim();
-});
+async function handleRequest(request) {
+  const cache = await caches.open('sw-cache');
+  const cached = await cache.match(request);
+
+  // 1. If we have a cached response, check its headers
+  if (cached) {
+    const cc = cached.headers.get('Cache-Control') || '';
+
+    // immutable → true cache-first: never hit network
+    if (cc.includes('immutable')) {
+      return cached;
+    }
+
+    // otherwise, fall through to network-first behavior
+    // (we still have cached as a fallback if network fails)
+  }
+
+  // 2. Default: network-first
+  const networkResponse = await tryNetwork(request);
+
+  if (networkResponse) {
+    const cc = networkResponse.headers.get('Cache-Control') || '';
+
+    // no-store → network-only (do not cache)
+    if (cc.includes('no-store')) {
+      return networkResponse;
+    }
+
+    // immutable or anything else → cache the fresh response
+    cache.put(request, networkResponse.clone());
+    return networkResponse;
+  }
+
+  // 3. Network failed → fallback to cache (network-first semantics)
+  if (cached) {
+    return cached;
+  }
+
+  return Response.error();
+}
+
+async function tryNetwork(request) {
+  try {
+    return await fetch(request);
+  } catch {
+    return null;
+  }
+}
 '''
 
 
