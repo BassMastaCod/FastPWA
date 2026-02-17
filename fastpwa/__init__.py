@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import Optional, Any
+from typing import Optional, Any, Union
 
 from fastapi import FastAPI, Request, Depends, APIRouter
 from fastapi.responses import HTMLResponse
@@ -130,7 +130,7 @@ if not logger.hasHandlers():
     logger.setLevel(logging.INFO)
 
 
-def ensure_list(value: Optional[Any | list]) -> list:
+def ensure_list(value: Optional[Union[Any, list]]) -> list:
     if value is None:
         return []
     if isinstance(value, list):
@@ -147,15 +147,14 @@ class Icon(BaseModel):
     @classmethod
     def for_web_path(cls, web_path: str) -> 'Icon':
         suffix = Path(web_path).suffix.lower()
-        match suffix:
-            case '.ico':
-                image_type = 'x-icon'
-            case '.png':
-                image_type = 'png'
-            case '.svg':
-                image_type = 'svg+xml'
-            case _:
-                raise ValueError(f'Unsupported icon file type: {suffix}')
+        if suffix == '.ico':
+            image_type = 'x-icon'
+        elif suffix == '.png':
+            image_type = 'png'
+        elif suffix == '.svg':
+            image_type = 'svg+xml'
+        else:
+            raise ValueError(f'Unsupported icon file type: {suffix}')
 
         return cls(
             src=web_path,
@@ -230,7 +229,7 @@ class PWA(FastAPI):
     def pwa_id(self):
         return self.title.lower().replace(' ', '-')
 
-    def static_mount(self, folder: str | Path):
+    def static_mount(self, folder: Union[str, Path]):
         folder = Path(folder)
         if not folder.exists():
             raise ValueError(f'Static folder "{folder}" does not exist.')
@@ -269,10 +268,10 @@ class PWA(FastAPI):
         return APIRouter(prefix=self.with_prefix(f'api{path}'), tags=[name] if name else None)
 
     def register_pwa(self,
-            html: str | Path,
-            css: Optional[str | list[str]] = None,
-            js: Optional[str | list[str]] = None,
-            js_libraries: Optional[str | list[str]] = None,
+            html: Union[str, Path],
+            css: Optional[Union[str, list[str]]] = None,
+            js: Optional[Union[str, list[str]]] = None,
+            js_libraries: Optional[Union[str, list[str]]] = None,
             dep: Optional[Depends] = None,
             app_name: Optional[str] = None,
             app_description: Optional[str] = None,
@@ -334,10 +333,10 @@ class PWA(FastAPI):
 
     def page(self,
              route: str,
-             html: str | Path,
-             css: Optional[str | list[str]] = None,
-             js: Optional[str | list[str]] = None,
-             js_libraries: Optional[str | list[str]] = None,
+             html: Union[str, Path],
+             css: Optional[Union[str, list[str]]] = None,
+             js: Optional[Union[str, list[str]]] = None,
+             js_libraries: Optional[Union[str, list[str]]] = None,
              color: Optional[str] = None,
              **get_kwargs):
         route = self.with_prefix(route)
