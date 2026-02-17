@@ -216,6 +216,7 @@ class PWA(FastAPI):
             css: Optional[str | list[str]] = None,
             js: Optional[str | list[str]] = None,
             js_libraries: Optional[str | list[str]] = None,
+            dep: Optional[Depends] = None,
             app_name: Optional[str] = None,
             app_description: Optional[str] = None,
             icon: Optional[Icon] = None,
@@ -248,7 +249,7 @@ class PWA(FastAPI):
             return HTMLResponse(content=SERVICE_WORKER, media_type='application/javascript')
 
         @self.get(route, include_in_schema=False)
-        async def index(request: Request) -> HTMLResponse:
+        async def index(request: Request, _dep = dep if dep else None) -> HTMLResponse:
             pwa_meta = self.pwa_template.render(
                 route=route,
                 app_id=self.pwa_id,
