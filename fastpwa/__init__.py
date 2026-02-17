@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import Optional, Any
+from typing import Optional, Any, Union
 
 from fastapi import FastAPI, Request, Depends, APIRouter
 from fastapi.responses import HTMLResponse
@@ -14,6 +14,7 @@ PAGE_TEMPLATE = '''
 <html lang="en">
 <head>
     <meta charset="UTF-8" />
+    <meta name="path-prefix" content="{{ path_prefix }}">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ title }}</title>
     {{ pwa_content | safe }}
@@ -43,10 +44,10 @@ PWA_TEMPLATE = '''
     {% if color %}
     <meta name="theme-color" content="{{ color }}">
     {% endif %}
-    <link rel="manifest" href="{{ route }}/{{ app_id }}.webmanifest">
+    <link rel="manifest" href="{{ route }}{{ app_id }}.webmanifest">
     <script>
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('{{ route }}/service-worker.js')
+            navigator.serviceWorker.register('{{ route }}service-worker.js')
                 .then(reg => console.log('SW registered:', reg.scope))
                 .catch(err => console.error('SW registration failed:', err));
         }
@@ -55,13 +56,69 @@ PWA_TEMPLATE = '''
 
 
 SERVICE_WORKER = '''
-self.addEventListener('install', (event) => {
-  self.skipWaiting();
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', () => self.clients.claim());
+
+self.addEventListener('fetch', event => {
+  const req = event.request;
+
+  // Only GET participates in caching
+  if (req.method !== 'GET') {
+    event.respondWith(fetch(req));
+    return;
+  }
+
+  event.respondWith(handleRequest(req));
 });
 
-self.addEventListener('activate', (event) => {
-  return self.clients.claim();
-});
+async function handleRequest(request) {
+  const cache = await caches.open('sw-cache');
+  const cached = await cache.match(request);
+
+  // 1. If we have a cached response, check its headers
+  if (cached) {
+    const cc = cached.headers.get('Cache-Control') || '';
+
+    // immutable → true cache-first: never hit network
+    if (cc.includes('immutable')) {
+      return cached;
+    }
+
+    // otherwise, fall through to network-first behavior
+    // (we still have cached as a fallback if network fails)
+  }
+
+  // 2. Default: network-first
+  const networkResponse = await tryNetwork(request);
+
+  if (networkResponse) {
+    const cc = networkResponse.headers.get('Cache-Control') || '';
+
+    // no-store → network-only (do not cache)
+    if (cc.includes('no-store')) {
+      return networkResponse;
+    }
+
+    // immutable or anything else → cache the fresh response
+    cache.put(request, networkResponse.clone());
+    return networkResponse;
+  }
+
+  // 3. Network failed → fallback to cache (network-first semantics)
+  if (cached) {
+    return cached;
+  }
+
+  return Response.error();
+}
+
+async function tryNetwork(request) {
+  try {
+    return await fetch(request);
+  } catch {
+    return null;
+  }
+}
 '''
 
 
@@ -73,7 +130,7 @@ if not logger.hasHandlers():
     logger.setLevel(logging.INFO)
 
 
-def ensure_list(value: Optional[Any | list]) -> list:
+def ensure_list(value: Optional[Union[Any, list]]) -> list:
     if value is None:
         return []
     if isinstance(value, list):
@@ -90,15 +147,14 @@ class Icon(BaseModel):
     @classmethod
     def for_web_path(cls, web_path: str) -> 'Icon':
         suffix = Path(web_path).suffix.lower()
-        match suffix:
-            case '.ico':
-                image_type = 'x-icon'
-            case '.png':
-                image_type = 'png'
-            case '.svg':
-                image_type = 'svg+xml'
-            case _:
-                raise ValueError(f'Unsupported icon file type: {suffix}')
+        if suffix == '.ico':
+            image_type = 'x-icon'
+        elif suffix == '.png':
+            image_type = 'png'
+        elif suffix == '.svg':
+            image_type = 'svg+xml'
+        else:
+            raise ValueError(f'Unsupported icon file type: {suffix}')
 
         return cls(
             src=web_path,
@@ -173,7 +229,7 @@ class PWA(FastAPI):
     def pwa_id(self):
         return self.title.lower().replace(' ', '-')
 
-    def static_mount(self, folder: str | Path):
+    def static_mount(self, folder: Union[str, Path]):
         folder = Path(folder)
         if not folder.exists():
             raise ValueError(f'Static folder "{folder}" does not exist.')
@@ -212,10 +268,11 @@ class PWA(FastAPI):
         return APIRouter(prefix=self.with_prefix(f'api{path}'), tags=[name] if name else None)
 
     def register_pwa(self,
-            html: str | Path,
-            css: Optional[str | list[str]] = None,
-            js: Optional[str | list[str]] = None,
-            js_libraries: Optional[str | list[str]] = None,
+            html: Union[str, Path],
+            css: Optional[Union[str, list[str]]] = None,
+            js: Optional[Union[str, list[str]]] = None,
+            js_libraries: Optional[Union[str, list[str]]] = None,
+            dep: Optional[Depends] = None,
             app_name: Optional[str] = None,
             app_description: Optional[str] = None,
             icon: Optional[Icon] = None,
@@ -248,7 +305,7 @@ class PWA(FastAPI):
             return HTMLResponse(content=SERVICE_WORKER, media_type='application/javascript')
 
         @self.get(route, include_in_schema=False)
-        async def index(request: Request) -> HTMLResponse:
+        async def index(request: Request, _dep = dep if dep else None) -> HTMLResponse:
             pwa_meta = self.pwa_template.render(
                 route=route,
                 app_id=self.pwa_id,
@@ -257,6 +314,7 @@ class PWA(FastAPI):
                 color=color
             )
             return HTMLResponse(self.page_template.render(
+                path_prefix=self.prefix,
                 request=request,
                 title=app_name,
                 pwa_content=pwa_meta,
@@ -275,16 +333,17 @@ class PWA(FastAPI):
 
     def page(self,
              route: str,
-             html: str | Path,
-             css: Optional[str | list[str]] = None,
-             js: Optional[str | list[str]] = None,
-             js_libraries: Optional[str | list[str]] = None,
+             html: Union[str, Path],
+             css: Optional[Union[str, list[str]]] = None,
+             js: Optional[Union[str, list[str]]] = None,
+             js_libraries: Optional[Union[str, list[str]]] = None,
              color: Optional[str] = None,
              **get_kwargs):
         route = self.with_prefix(route)
         def decorator(func):
             async def response_wrapper(request: Request, context: dict = Depends(func)):
                 return HTMLResponse(self.page_template.render(
+                    path_prefix=self.prefix,
                     request=request,
                     title=context.get('title', self.title),
                     color=color,
