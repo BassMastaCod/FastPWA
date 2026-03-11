@@ -14,8 +14,8 @@ PAGE_TEMPLATE = '''
 <html lang="en">
 <head>
     <meta charset="UTF-8" />
-    <meta name="path-prefix" content="{{ path_prefix }}">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <base href="{{ path_prefix }}">
     <title>{{ title }}</title>
     {{ pwa_content | safe }}
     {% for path in css %}
@@ -324,7 +324,7 @@ class PWA(FastAPI):
                 js_libraries=ensure_list(js_libraries),
                 body=self.env.get_template(html).render()
             ))
-        logger.info(f'Registered Progressive Web App {app_name}')
+        logger.info(f'Registered Progressive Web App {app_name}: accessible at {route}')
 
     def pwa_with_shortcuts(self, **kwargs):
         def decorator(func):
