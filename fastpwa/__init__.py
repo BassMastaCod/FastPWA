@@ -8,6 +8,10 @@ from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader
 from pydantic import BaseModel
 
+try:
+    from fast_controller import Controller
+except ImportError:
+    Controller = lambda *args, **kwargs: None
 
 PAGE_TEMPLATE = '''
 <!DOCTYPE html>
@@ -194,6 +198,7 @@ class PWA(FastAPI):
             prefix: Optional[str] = None,
             template_dir: Optional[str] = '.',
             api_path: Optional[str] = 'api',
+            controller: Optional[Any] = None,
             **kwargs):
         self.title = None
         self.summary = None
@@ -218,12 +223,15 @@ class PWA(FastAPI):
         self.env = Environment(loader=FileSystemLoader(template_dir))
         self.page_template = self.env.from_string(PAGE_TEMPLATE)
         self.pwa_template = self.env.from_string(PWA_TEMPLATE)
-        self.api = APIRouter(prefix=self.with_prefix('api'))
+        self.controller = controller or self._default_controller()
         logger.info(f'Established {title} API, viewable at {self.docs_url}')
 
     @staticmethod
     def _normalize_path(path: str):
         return '/' + path.strip('/') + '/' if path else '/'
+
+    def _default_controller(self):
+        return Controller(prefix=self.api_prefix)
 
     def with_prefix(self, route: str) -> str:
         """Adds the prefix to a route, avoiding empty segments trailing slashes."""
@@ -265,11 +273,6 @@ class PWA(FastAPI):
             self.favicon = Icon.for_web_path(web_path)
             logger.info(f'Discovered favicon: {self.favicon}')
             break
-
-    def api_router(self, path: Optional[str] = '', name: Optional[str] = None) -> APIRouter:
-        if path:
-            path = '/' + path.strip('/')
-        return APIRouter(prefix=self.with_prefix(f'api{path}'), tags=[name] if name else None)
 
     def register_pwa(self,
             html: str | Path,
@@ -334,6 +337,44 @@ class PWA(FastAPI):
             self.register_pwa(**kwargs, get_shortcuts=func)
             return func
         return decorator
+
+    def include_api_router(self, router, **kwargs):
+        """A helper to include routers into the PWA's controller router.
+
+        The router is placed under the controller router (i.e., /app/api/santity)
+
+        :param router: The FastAPI APIRouter instance to include
+        :params **kwargs: Additional options for router.include_router()
+        """
+        if not self.controller:
+            raise RuntimeError('No Controller exists, maybe you forgot to install as fastpwa[controller]?')
+        self.controller.router.include_router(router, **kwargs)
+        router_path = self.api_prefix + router.prefix
+        logger.info(f'Configured {router_path} {router.tags} to be registered on `finalize_api()`')
+
+    @staticmethod
+    def new_api_router(path: Optional[str] = '', name: Optional[str] = None) -> APIRouter:
+        """Creates a new router to which additional routes may be added.
+
+        Once all routes are added, you will want to See :meth:`include_api_router`
+
+        :param path: The path for the router (i.e., '/sanity' for the example above)
+        :param name: The label for the router to be displayed in the Docs (i.e., 'Sanity Tests')
+        :return: The newly created APIRouter.
+        """
+        if path:
+            path = '/' + path.strip('/')
+        return APIRouter(prefix=path, tags=[name] if name else None)
+
+    def finalize_api(self):
+        """Finalizes the API setup by including the controller in the FastAPI app.
+
+        This should be called after all routes have been added to the controller.
+        """
+        if not self.controller:
+            raise RuntimeError('No Controller exists, maybe you forgot to install as fastpwa[controller]?')
+        self.controller.include_controller(self)
+        logger.info(f'Finalized {len(self.controller.router.routes)} API routes at {self.api_prefix}')
 
     def page(self,
              route: str,
