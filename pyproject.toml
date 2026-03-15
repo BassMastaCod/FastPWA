@@ -37,3 +37,6 @@ pythonpath = "fastpwa"
 addopts = [
     "--import-mode=importlib",
 ]
+
+[project.optional-dependencies]
+controller = ["fast-controller"]
