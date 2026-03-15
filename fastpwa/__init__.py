@@ -343,6 +343,10 @@ class PWA(FastAPI):
         route = self.with_prefix(route)
         def decorator(func):
             async def response_wrapper(request: Request, context: dict = Depends(func)):
+                if isinstance(html, str) and ('<' in html and '>' in html):
+                    rendered_body = html
+                else:
+                    rendered_body = self.env.get_template(html).render(**context)
                 return HTMLResponse(self.page_template.render(
                     path_prefix=self.prefix,
                     request=request,
@@ -351,7 +355,7 @@ class PWA(FastAPI):
                     css=ensure_list(css) + self.global_css,
                     js=ensure_list(js) + self.global_js,
                     js_libaries=ensure_list(js_libraries),
-                    body=self.env.get_template(html).render(**context)
+                    body=rendered_body
                 ))
 
             self.get(route, include_in_schema=False, **get_kwargs)(response_wrapper)
