@@ -193,17 +193,20 @@ class PWA(FastAPI):
             summary: Optional[str] = 'Installable FastAPI app',
             prefix: Optional[str] = None,
             template_dir: Optional[str] = '.',
+            api_path: Optional[str] = 'api',
             **kwargs):
         self.title = None
         self.summary = None
         self.docs_url = None
         self.prefix = self._normalize_path(prefix)
+        self.api_path = api_path
+        self.api_prefix = self.with_prefix(api_path)
         super().__init__(
             title=title,
             summary=summary,
-            docs_url=kwargs.pop('docs_url', self.with_prefix('api/docs')),
-            redoc_url=kwargs.pop('redoc_url', self.with_prefix('api/redoc')),
-            openapi_url=kwargs.pop('openapi_url', self.with_prefix('api/openapi.json')),
+            docs_url=kwargs.pop('docs_url', f'{self.api_prefix}/docs'),
+            redoc_url=kwargs.pop('redoc_url', f'{self.api_prefix}/redoc'),
+            openapi_url=kwargs.pop('openapi_url', f'{self.api_prefix}/openapi.json'),
             **kwargs
         )
 
