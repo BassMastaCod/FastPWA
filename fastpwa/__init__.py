@@ -1,4 +1,5 @@
 import logging
+from itertools import chain
 from pathlib import Path
 from typing import Optional, Any
 
@@ -142,6 +143,32 @@ def ensure_list(value: Optional[Any | list]) -> list:
     return [value]
 
 
+class AssetLibrary(dict[str, str]):
+    def add(self, path: str):
+        self[Path(path).name] = path
+
+    def get_css_for(self, page: str, is_index: bool = False) -> list[Path]:
+        return self.get_assets_for(page, 'css', is_index)
+
+    def get_js_for(self, page: str, is_index: bool = False) -> list[Path]:
+        return self.get_assets_for(page, 'js', is_index)
+
+    def get_assets_for(self, page: str, extension: str, is_index: bool = False) -> list[Path]:
+        assets = []
+        if global_asset := self.get(f'global.{extension}'):
+            assets.append(global_asset)
+        if is_index:
+            if index_asset := self.get(f'index.{extension}'):
+                assets.append(index_asset)
+
+        if isinstance(page, str) and '<' not in page:
+            page = Path(page)
+        if isinstance(page, Path):
+            if page_asset := self.get(f'{Path(page).stem}.{extension}'):
+                assets.append(page_asset)
+        return assets
+
+
 class Icon(BaseModel):
     src: str
     sizes: str
@@ -215,10 +242,7 @@ class PWA(FastAPI):
             **kwargs
         )
 
-        self.index_css = []
-        self.index_js = []
-        self.global_css = []
-        self.global_js = []
+        self.assets = AssetLibrary()
         self.favicon = None
         self.env = Environment(loader=FileSystemLoader(template_dir))
         self.page_template = self.env.from_string(PAGE_TEMPLATE)
@@ -254,17 +278,10 @@ class PWA(FastAPI):
         self._discover_favicon(folder, mount_path)
 
     def _discover_assets(self, folder, mount_path):
-        asset_mapping = {
-            'index.css': self.index_css,
-            'index.js': self.index_js,
-            'global.css': self.global_css,
-            'global.js': self.global_js
-        }
-        for file in [f for f in folder.rglob('*.*') if f.name in asset_mapping]:
+        for file in chain(folder.rglob('*.js'), folder.rglob('*.css')):
             rel_path = file.relative_to(folder)
             web_path = f'{mount_path}/{rel_path.as_posix()}'
-            asset_mapping[file.name].append(web_path)
-            logger.info(f'Discovered asset at "{web_path}"; will automatically be included in HTML.')
+            self.assets.add(web_path)
 
     def _discover_favicon(self, folder, mount_path):
         for file in folder.rglob('favicon.*'):
@@ -311,6 +328,9 @@ class PWA(FastAPI):
         async def sw_js():
             return HTMLResponse(content=SERVICE_WORKER, media_type='application/javascript')
 
+        css_assets = ensure_list(css) + self.assets.get_css_for(route, is_index=True)
+        js_assets = ensure_list(js) + self.assets.get_js_for(route, is_index=True)
+
         @self.get(route, include_in_schema=False)
         async def index(request: Request, _dep = dep if dep else None) -> HTMLResponse:
             pwa_meta = self.pwa_template.render(
@@ -325,12 +345,17 @@ class PWA(FastAPI):
                 request=request,
                 title=app_name,
                 pwa_content=pwa_meta,
-                css=ensure_list(css) + self.index_css + self.global_css,
-                js=ensure_list(js) + self.index_js + self.global_js,
+                css=css_assets,
+                js=js_assets,
                 js_libraries=ensure_list(js_libraries),
                 body=self.env.get_template(html).render()
             ))
-        logger.info(f'Registered Progressive Web App {app_name}: accessible at {route}')
+        logger.info(f'Registered Progressive Web App {app_name}')
+        logger.info(f'Landing page is accessible at {route} and uses the following assets:')
+        if css_assets:
+            logger.info(f'    CSS: {css_assets}')
+        if js_assets:
+            logger.info(f'    JS: {js_assets}')
 
     def pwa_with_shortcuts(self, **kwargs):
         def decorator(func):
@@ -385,6 +410,9 @@ class PWA(FastAPI):
              color: Optional[str] = None,
              **get_kwargs):
         route = self.with_prefix(route)
+        css_assets = ensure_list(css) + self.assets.get_css_for(html)
+        js_assets = ensure_list(js) + self.assets.get_js_for(html)
+
         def decorator(func):
             async def response_wrapper(request: Request, context: dict = Depends(func)):
                 if isinstance(html, str) and ('<' in html and '>' in html):
@@ -396,13 +424,17 @@ class PWA(FastAPI):
                     request=request,
                     title=context.get('title', self.title),
                     color=color,
-                    css=ensure_list(css) + self.global_css,
-                    js=ensure_list(js) + self.global_js,
+                    css=css_assets,
+                    js=js_assets,
                     js_libaries=ensure_list(js_libraries),
                     body=rendered_body
                 ))
 
             self.get(route, include_in_schema=False, **get_kwargs)(response_wrapper)
-            logger.info(f'Registered page at {route}')
+            logger.info(f'Registered page at {route} with the following assets:')
+            if css_assets:
+                logger.info(f'    CSS: {css_assets}')
+            if js_assets:
+                logger.info(f'    JS: {js_assets}')
             return func
         return decorator
