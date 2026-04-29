@@ -1,7 +1,7 @@
 import logging
 from itertools import chain
 from pathlib import Path
-from typing import Optional, Any
+from typing import Optional, Any, Callable
 
 from fastapi import FastAPI, Request, Depends, APIRouter
 from fastapi.responses import HTMLResponse
@@ -291,6 +291,60 @@ class PWA(FastAPI):
             logger.info(f'Discovered favicon: {self.favicon}')
             break
 
+    def _register_page(
+            self,
+            route: str,
+            html: str | Path,
+            css: Optional[str | list[str]] = None,
+            js: Optional[str | list[str]] = None,
+            js_libraries: Optional[str | list[str]] = None,
+            color: Optional[str] = None,
+            dep: Optional[Depends] = None,
+            pwa_content: Optional[str] = '',
+            func: Optional[callable] = None,
+            **get_kwargs
+    ) -> None:
+        css_assets = ensure_list(css) + self.assets.get_css_for(html, is_index=bool(pwa_content))
+        js_assets = ensure_list(js) + self.assets.get_js_for(html, is_index=bool(pwa_content))
+
+        async def response_wrapper(
+                request: Request,
+                _dep=dep if dep else None,
+                context=Depends(func) if func else None
+        ) -> HTMLResponse:
+            if context is None:
+                context = dict()
+            if isinstance(html, str) and '<' in html:
+                rendered_body = html
+            else:
+                rendered_body = self.env.get_template(html).render(**context)
+            return HTMLResponse(self.page_template.render(
+                path_prefix=self.prefix,
+                request=request,
+                title=context.get('title', self.title),
+                pwa_content=pwa_content,
+                color=color,
+                css=css_assets,
+                js=js_assets,
+                js_libraries=ensure_list(js_libraries),
+                body=rendered_body
+            ))
+
+        route = self.with_prefix(route)
+        self.get(route, include_in_schema=False, **get_kwargs)(response_wrapper)
+
+        if pwa_content:
+            logger.info(f'Registered Progressive Web App {self.title}')
+            logger.info(f'Landing page is accessible at {route} and uses the following assets:')
+        else:
+            logger.info(f'Registered page at {route} with the following assets:')
+        if css_assets:
+            logger.info(f'    CSS: {css_assets}')
+        if js_assets:
+            logger.info(f'    JS Modules: {js_assets}')
+        if js_libraries:
+            logger.info(f'    JS Libraries: {js_libraries}')
+
     def register_pwa(self,
             html: str | Path,
             css: Optional[str | list[str]] = None,
@@ -304,15 +358,17 @@ class PWA(FastAPI):
             background_color: Optional[str] = '#FFFFFF',
             route: Optional[str] = None,
             get_shortcuts: Optional[callable] = None):
+        og_route = route
         route = self.with_prefix(route)
-        app_name = app_name or self.title
+        if app_name:
+            self.title = app_name
         icon = icon or self.favicon
 
         @self.get(f'{route}{self.pwa_id}.webmanifest', include_in_schema=False)
         async def manifest() -> Manifest:
             return Manifest(
-                name=app_name,
-                short_name=app_name.replace(' ', ''),
+                name=self.title,
+                short_name=self.title.replace(' ', ''),
                 description=self.summary,
                 start_url=route,
                 scope=route,
@@ -328,34 +384,13 @@ class PWA(FastAPI):
         async def sw_js():
             return HTMLResponse(content=SERVICE_WORKER, media_type='application/javascript')
 
-        css_assets = ensure_list(css) + self.assets.get_css_for(route, is_index=True)
-        js_assets = ensure_list(js) + self.assets.get_js_for(route, is_index=True)
-
-        @self.get(route, include_in_schema=False)
-        async def index(request: Request, _dep = dep if dep else None) -> HTMLResponse:
-            pwa_meta = self.pwa_template.render(
-                route=route,
-                app_id=self.pwa_id,
-                description=app_description or self.summary,
-                favicon=icon,
-                color=color
-            )
-            return HTMLResponse(self.page_template.render(
-                path_prefix=self.prefix,
-                request=request,
-                title=app_name,
-                pwa_content=pwa_meta,
-                css=css_assets,
-                js=js_assets,
-                js_libraries=ensure_list(js_libraries),
-                body=self.env.get_template(html).render()
-            ))
-        logger.info(f'Registered Progressive Web App {app_name}')
-        logger.info(f'Landing page is accessible at {route} and uses the following assets:')
-        if css_assets:
-            logger.info(f'    CSS: {css_assets}')
-        if js_assets:
-            logger.info(f'    JS: {js_assets}')
+        self._register_page(og_route, html, css, js, js_libraries, color, dep, pwa_content=self.pwa_template.render(
+            route=route,
+            app_id=self.pwa_id,
+            description=app_description or self.summary,
+            favicon=icon,
+            color=color
+        ))
 
     def pwa_with_shortcuts(self, **kwargs):
         def decorator(func):
@@ -408,33 +443,8 @@ class PWA(FastAPI):
              js: Optional[str | list[str]] = None,
              js_libraries: Optional[str | list[str]] = None,
              color: Optional[str] = None,
-             **get_kwargs):
-        route = self.with_prefix(route)
-        css_assets = ensure_list(css) + self.assets.get_css_for(html)
-        js_assets = ensure_list(js) + self.assets.get_js_for(html)
-
+             **get_kwargs) -> Callable:
         def decorator(func):
-            async def response_wrapper(request: Request, context: dict = Depends(func)):
-                if isinstance(html, str) and ('<' in html and '>' in html):
-                    rendered_body = html
-                else:
-                    rendered_body = self.env.get_template(html).render(**context)
-                return HTMLResponse(self.page_template.render(
-                    path_prefix=self.prefix,
-                    request=request,
-                    title=context.get('title', self.title),
-                    color=color,
-                    css=css_assets,
-                    js=js_assets,
-                    js_libaries=ensure_list(js_libraries),
-                    body=rendered_body
-                ))
-
-            self.get(route, include_in_schema=False, **get_kwargs)(response_wrapper)
-            logger.info(f'Registered page at {route} with the following assets:')
-            if css_assets:
-                logger.info(f'    CSS: {css_assets}')
-            if js_assets:
-                logger.info(f'    JS: {js_assets}')
+            self._register_page(route, html, css, js, js_libraries, color, func=func, **get_kwargs)
             return func
         return decorator
