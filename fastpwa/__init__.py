@@ -3,6 +3,7 @@ from itertools import chain
 from pathlib import Path
 from typing import Optional, Any, Callable
 
+from daomodel.db import DataLayer
 from fastapi import FastAPI, Request, Depends, APIRouter
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -255,7 +256,10 @@ class PWA(FastAPI):
         return '/' + path.strip('/') + '/' if path else '/'
 
     def _default_controller(self):
-        return Controller(prefix=self.api_prefix)
+        controller = Controller(prefix=self.api_prefix)
+        controller.data_layer = DataLayer(sqlite_path='database.db')
+        controller.data_layer.init_db()
+        return controller
 
     def with_prefix(self, route: str) -> str:
         """Adds the prefix to a route, avoiding empty segments trailing slashes."""
